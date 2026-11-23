@@ -96,6 +96,20 @@ gas-exchange bracket record) or, for the CDR gas-exchange and upscaling streams,
 at the end of the run. A run in which none of these happens writes nothing, and
 its compute is lost. Ungated by schema version.
 
+Rule L -- :func:`check_coarse_tile_sizes` mirrors ``init_coarse``
+(``src/roms_read_write.F90``, ucla-roms >= 0.6.2): ROMS splits the coarse grid of
+``llm // 2`` by ``mmm // 2`` points into ``np_xi`` by ``np_eta`` tiles of
+``ceil(points / tiles)`` points and stops ("tiling too fine for coarse-resolution
+forcing inputs") when that width is 2 or less in either direction, since the
+interpolation halo would need data from beyond the adjacent tiles. It does so at
+the first read of a forcing field on the coarse grid, which happens when a
+compiled forcing module has its interpolation switch on: ``interp_bulk_frc`` with
+``BULK_FRC``, ``interp_flux_frc`` without it (``init_arrays.F90``), and
+``interp_bgc_frc`` with ``MARBL`` or ``BIOLOGY_BEC2``. Skipped when the build's
+cppdefs are unknown and under auto-tiling, where ROMS chooses the processor grid at
+start-up. Ungated by schema version: releases before 0.6.2 lack the stop and, by
+its source comment, corrupt the interpolated forcing instead.
+
 All are plain functions, not Pydantic ``model_validator``s -- they must not
 run on every model construction (old blueprints/tests would break), and Rules
 A and C need an explicit, caller-supplied set of active cppdefs to know which
@@ -191,7 +205,8 @@ class NamelistConsistencyError(ValueError):
     ``"restart_period_divisible_by_dt"``, ``"averages_end_on_marbl_step"``,
     ``"file_name_lengths"``, ``"forcing_file_count"``, ``"gpu_features"``,
     ``"gpu_array_sizes"``, ``"output_periods_divisible_by_dt"``,
-    ``"marbl_step_ceiling"`` or ``"output_written_in_window"``).
+    ``"marbl_step_ceiling"``, ``"output_written_in_window"`` or
+    ``"coarse_tile_sizes"``).
     ``"file_name_lengths"`` reports every offending key in one error, so its
     ``section`` may join several group names with ``", "`` and its ``keys`` may
     span those groups; ``"gpu_features"`` and ``"gpu_array_sizes"`` also report
@@ -1210,6 +1225,96 @@ def check_file_name_lengths(settings: RomsNamelistBase | Mapping[str, Any]) -> N
             rule="file_name_lengths",
             section=", ".join(dict.fromkeys(group for group, _, _ in too_long)),
             keys=tuple(dict.fromkeys(key for _, key, _ in too_long)),
+        )
+
+
+COARSE_TILE_MIN_POINTS: int = 3
+"""Fewest coarse-grid points per tile ucla-roms accepts with coarse-grid forcing
+(Rule L): ``init_coarse`` stops when ``ceil(points / tiles) <= 2``."""
+
+
+def coarse_tile_width(points: int, tiles: int) -> int:
+    """Coarse-grid points per tile that ``init_coarse`` tests against
+    :data:`COARSE_TILE_MIN_POINTS`: ``ceil((points // 2) / tiles)`` for a fine grid of
+    ``points`` interior points split into ``tiles`` tiles (``gnxc = gnx/2`` and
+    ``nxc = (gnxc + np_xi - 1)/np_xi`` in ``src/roms_read_write.F90``)."""
+    return (points // 2 + tiles - 1) // tiles
+
+
+def check_coarse_tile_sizes(
+    settings: RomsNamelistBase | Mapping[str, Any],
+    cppdefs: Mapping[str, bool],
+    *,
+    auto_tiling: bool = False,
+) -> None:
+    """Raise ``NamelistConsistencyError`` if a compiled forcing module reads its
+    forcing on the coarse grid and the tiling leaves a coarse tile ucla-roms refuses
+    (Rule L in the module docstring).
+
+    Parameters
+    ----------
+    settings
+        A canonical namelist dump or live namelist. Reads ``param_settings``
+        (``llm``, ``mmm``, ``np_xi``, ``np_eta``), ``surf_frc_settings``
+        (``interp_bulk_frc``, ``interp_flux_frc``) and ``bgc_settings.interp_bgc_frc``;
+        a missing group or key is skipped.
+    cppdefs
+        The build's cppdefs (keys ``bulk_frc``, ``marbl``, ``biology_bec2``). An empty
+        mapping means the build is unknown, and nothing is checked.
+    auto_tiling
+        ROMS chooses the processor grid at start-up, so the namelist tile counts
+        are placeholders and nothing is checked.
+    """
+    if auto_tiling or not cppdefs:
+        return
+    surf = _section(settings, "surf_frc_settings")
+    switch = "interp_bulk_frc" if cppdefs.get("bulk_frc") else "interp_flux_frc"
+    interp = bool(_section(surf, switch))
+    if cppdefs.get("marbl") or cppdefs.get("biology_bec2"):
+        interp = interp or bool(
+            _section(_section(settings, "bgc_settings"), "interp_bgc_frc")
+        )
+    if not interp:
+        return
+    param = _section(settings, "param_settings")
+    problems = []
+    for axis, points_key, tiles_key in (("xi", "llm", "np_xi"), ("eta", "mmm", "np_eta")):
+        try:
+            points = int(_section(param, points_key))
+            tiles = int(_section(param, tiles_key))
+        except (TypeError, ValueError):
+            continue
+        if points < 1 or tiles < 1:
+            continue
+        width = coarse_tile_width(points, tiles)
+        if width >= COARSE_TILE_MIN_POINTS:
+            continue
+        best = max(
+            (n for n in range(1, tiles + 1) if coarse_tile_width(points, n) >= COARSE_TILE_MIN_POINTS),
+            default=None,
+        )
+        hint = (
+            f"; the largest {tiles_key} up to {tiles} that works is {best}"
+            if best is not None
+            else f"; no {tiles_key} works for {points} points"
+        )
+        problems.append(
+            f"param_settings.{tiles_key}={tiles} splits the {points // 2} coarse-grid "
+            f"{axis} points ({points_key}={points} halved) into tiles of {width}, and "
+            f"ucla-roms stops when a coarse tile has {COARSE_TILE_MIN_POINTS - 1} points "
+            f"or fewer{hint}"
+        )
+    if problems:
+        raise NamelistConsistencyError(
+            "Coarse-grid surface forcing (interp_bulk_frc, interp_flux_frc or "
+            "interp_bgc_frc) cannot run "
+            "on this tiling: ROMS stops at the first forcing read with \"tiling too "
+            "fine for coarse-resolution forcing inputs\". "
+            + "; ".join(problems)
+            + ". Use fewer tiles, or surface forcing on the model grid.",
+            rule="coarse_tile_sizes",
+            section="param_settings",
+            keys=("np_xi", "np_eta"),
         )
 
 

@@ -30,9 +30,12 @@ _MODEL_PATH = (
     / "ModelSpec"
     / "cson_roms-marbl_v0.1.yaml"
 )
+# 12 x 12 points on the 2 x 2 tiles below leave coarse-grid tiles of 3 points, the
+# fewest ucla-roms' init_coarse accepts when surface forcing is on the coarse grid
+# (interp_frc), which several tests here switch on.
 _GRID_KWARGS = {
-    "nx": 3,
-    "ny": 4,
+    "nx": 12,
+    "ny": 12,
     "size_x": 500,
     "size_y": 1000,
     "center_lon": 0,
@@ -245,7 +248,7 @@ class TestConfigureBuildUsesGeneratedValues:
             {
                 "blk_frc": {"interp_frc": 1},
                 "bgc": {"interp_frc": 1},
-                "param": {"llm": 3, "mmm": 4, "n": 3, "np_xi": 2, "np_eta": 2},
+                "param": {"llm": 12, "mmm": 12, "n": 3, "np_xi": 2, "np_eta": 2},
                 "extract_data": {
                     "n_chd": 100,
                     "theta_s_chd": 5.0,

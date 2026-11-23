@@ -37,6 +37,7 @@ from cstar.roms.namelist import (
 )
 from cstar.roms.precheck import (
     _STREAM_CHECKS,
+    COARSE_TILE_MIN_POINTS,
     MAX_FORCING_FILES,
     MAX_FORCING_FILES_BEFORE_0_13_0,
     MAX_NAMELIST_FILE_NAME_LENGTH,
@@ -46,6 +47,7 @@ from cstar.roms.precheck import (
     averages_end_on_marbl_step_applies_to,
     averages_end_on_marbl_step_applies_to_schema,
     check_averages_end_on_marbl_step,
+    check_coarse_tile_sizes,
     check_file_name_lengths,
     check_forcing_file_count,
     check_output_streams_divide_rst,
@@ -1034,3 +1036,85 @@ def test_forcing_file_count_checks_a_live_namelist():
 def test_max_forcing_files_follows_the_schema(schema, expected):
     assert max_forcing_files(schema) == expected
     assert (MAX_FORCING_FILES, MAX_FORCING_FILES_BEFORE_0_13_0) == (10000, 360)
+
+
+def _coarse_settings(llm, np_xi, *, bulk=True, flux=False, bgc=False, mmm=40, np_eta=1):
+    return {
+        "param_settings": {"llm": llm, "mmm": mmm, "np_xi": np_xi, "np_eta": np_eta},
+        "surf_frc_settings": {"interp_bulk_frc": bulk, "interp_flux_frc": flux},
+        "bgc_settings": {"interp_bgc_frc": bgc},
+    }
+
+
+BULK_MARBL = {"bulk_frc": True, "marbl": True, "biology_bec2": False}
+FLUX_ONLY = {"bulk_frc": False, "marbl": False, "biology_bec2": False}
+
+
+class TestCoarseTileSizes:
+    """Rule L: ucla-roms ``init_coarse`` (src/roms_read_write.F90, 0.6.2 and later)
+    gives each tile ceil((llm // 2) / np_xi) coarse points and stops when that is 2
+    or fewer, at the first read of a forcing field a compiled module interpolates.
+    """
+
+    def test_minimum_is_three_points(self):
+        assert COARSE_TILE_MIN_POINTS == 3
+
+    @pytest.mark.parametrize(
+        ("llm", "np_xi"), [(20, 5), (20, 8), (20, 10), (20, 11), (40, 10), (8, 2), (1, 1)]
+    )
+    def test_refused(self, llm, np_xi):
+        with pytest.raises(NamelistConsistencyError, match="np_xi") as exc:
+            check_coarse_tile_sizes(_coarse_settings(llm, np_xi), BULK_MARBL)
+        assert exc.value.rule == "coarse_tile_sizes"
+        assert exc.value.section == "param_settings"
+
+    @pytest.mark.parametrize(("llm", "np_xi"), [(20, 1), (20, 3), (20, 4), (40, 6), (224, 16)])
+    def test_accepted(self, llm, np_xi):
+        check_coarse_tile_sizes(_coarse_settings(llm, np_xi), BULK_MARBL)
+
+    def test_names_the_largest_tiling_that_works(self):
+        # 10 coarse points: 4 tiles give ceil(10/4) = 3, 5 tiles give 2.
+        with pytest.raises(NamelistConsistencyError, match="largest np_xi up to 8 that works is 4"):
+            check_coarse_tile_sizes(_coarse_settings(20, 8), BULK_MARBL)
+
+    def test_eta_direction(self):
+        with pytest.raises(NamelistConsistencyError, match="np_eta"):
+            check_coarse_tile_sizes(_coarse_settings(40, 1, mmm=20, np_eta=8), BULK_MARBL)
+
+    def test_switch_follows_the_compiled_forcing_module(self):
+        # A bulk build reads interp_bulk_frc and ignores interp_flux_frc; a flux
+        # build the other way round (init_arrays.F90).
+        bulk_off_flux_on = _coarse_settings(20, 8, bulk=False, flux=True)
+        check_coarse_tile_sizes(bulk_off_flux_on, BULK_MARBL)
+        with pytest.raises(NamelistConsistencyError):
+            check_coarse_tile_sizes(bulk_off_flux_on, FLUX_ONLY)
+        check_coarse_tile_sizes(_coarse_settings(20, 8, bulk=True, flux=False), FLUX_ONLY)
+
+    def test_bgc_switch_needs_a_bgc_build(self):
+        bgc_only = _coarse_settings(20, 8, bulk=False, bgc=True)
+        with pytest.raises(NamelistConsistencyError):
+            check_coarse_tile_sizes(bgc_only, BULK_MARBL)
+        check_coarse_tile_sizes(bgc_only, {**BULK_MARBL, "marbl": False})
+        with pytest.raises(NamelistConsistencyError):
+            check_coarse_tile_sizes(bgc_only, {**BULK_MARBL, "marbl": False, "biology_bec2": True})
+
+    def test_skipped_when_the_build_is_unknown(self):
+        check_coarse_tile_sizes(_coarse_settings(20, 8), {})
+
+    def test_skipped_without_coarse_forcing(self):
+        check_coarse_tile_sizes(_coarse_settings(20, 8, bulk=False), BULK_MARBL)
+
+    def test_skipped_under_auto_tiling(self):
+        check_coarse_tile_sizes(_coarse_settings(20, 8), BULK_MARBL, auto_tiling=True)
+
+    def test_missing_groups_are_skipped(self):
+        check_coarse_tile_sizes({"surf_frc_settings": {"interp_bulk_frc": True}}, BULK_MARBL)
+        check_coarse_tile_sizes({}, BULK_MARBL)
+
+    def test_live_namelist(self):
+        nml = RomsNamelistV0_16_0.read(V0_16_0_NAMELIST)
+        nml.surf_frc_settings.interp_bulk_frc = True
+        nml.param_settings.llm, nml.param_settings.np_xi = 20, 8
+        nml.param_settings.mmm, nml.param_settings.np_eta = 40, 1
+        with pytest.raises(NamelistConsistencyError):
+            check_coarse_tile_sizes(nml, BULK_MARBL)

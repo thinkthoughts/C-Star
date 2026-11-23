@@ -114,6 +114,7 @@ from cstar.roms.precheck import (
     applies_to,
     averages_end_on_marbl_step_applies_to_schema,
     check_averages_end_on_marbl_step,
+    check_coarse_tile_sizes,
     check_file_name_lengths,
     check_forcing_file_count,
     check_marbl_step_ceiling,
@@ -1385,17 +1386,22 @@ class ROMSSimulation(Simulation):
         Raises
         ------
         NamelistConsistencyError
-            If an output-stream rule of `_check_output_settings` fails, or a file
-            name is too long for ROMS to read (see `cstar.roms.precheck`).
+            If an output-stream rule of `_check_output_settings` fails, a file
+            name is too long for ROMS to read, or the tiling is too fine for
+            coarse-grid surface forcing (see `cstar.roms.precheck`).
         """
         for message in self._check_output_settings(nml):
             self.log.warning(message)
 
         # Names as written, after the override merge: ROMS cannot read one that
         # fills its buffer, and a pre-run never starts ROMS to find out. Likewise
-        # a forcing-file list longer than the pinned release reads.
+        # a forcing-file list longer than the pinned release reads, and a tiling
+        # whose coarse-grid tiles ROMS refuses when it interpolates forcing.
         check_file_name_lengths(nml)
         check_forcing_file_count(nml, type(nml))
+        check_coarse_tile_sizes(
+            nml, self._active_cppdefs_for_precheck(), auto_tiling=self.auto_tiling
+        )
 
     def _check_output_settings(self, nml: RomsNamelistBase) -> list[str]:
         """Check the output streams of `nml` against ucla-roms' start-up rules.
@@ -2729,6 +2735,7 @@ class ROMSSimulation(Simulation):
         "UPSCALING": "upscaling",
         "DIAGNOSTICS": "diagnostics",
         "BIOLOGY_BEC2": "biology_bec2",
+        "BULK_FRC": "bulk_frc",
     }
 
     def _active_cppdefs_for_precheck(self) -> dict[str, bool]:

@@ -22,8 +22,10 @@ import cstar.catalog
 from cstar.applications.forge.blueprint import ForgeBlueprint, RunWindow
 from cstar.applications.forge.namelist_model import (
     CPPDEFS_KEYS,
+    RunTimeSettings,
     check_tile_sizes,
     run_time_settings_for_ref,
+    settings_support_problems,
     unknown_settings_keys,
     validate_run_time_sections,
 )
@@ -285,6 +287,34 @@ class TestTileSizes:
 
     def test_auto_tiling_skips(self) -> None:
         check_tile_sizes(self._param(8, 16), auto_tiling=True)
+
+    @pytest.mark.parametrize(("llm", "np_xi"), [(20, 5), (20, 8), (40, 10)])
+    def test_coarse_forcing_refuses_coarse_tiles_of_two_points(
+        self, llm: int, np_xi: int
+    ) -> None:
+        """ucla-roms ``init_coarse`` stops when ceil((llm // 2) / np_xi) <= 2 and
+        surface forcing is on the coarse grid; the fine tiles here are all legal.
+        """
+        check_tile_sizes(self._param(llm, np_xi, mmm=40), auto_tiling=False)
+        with pytest.raises(ValueError, match="coarse-grid points"):
+            check_tile_sizes(
+                self._param(llm, np_xi, mmm=40), auto_tiling=False, interp_frc=True
+            )
+
+    def test_coarse_forcing_accepts_three_point_coarse_tiles(self) -> None:
+        check_tile_sizes(self._param(20, 4, mmm=40), auto_tiling=False, interp_frc=True)
+
+    @pytest.mark.parametrize("section", ["blk_frc", "bgc"])
+    def test_settings_support_problems_reads_interp_frc(self, section: str) -> None:
+        settings = {
+            "param": self._param(20, 8, mmm=40),
+            section: {"interp_frc": 1},
+        }
+        problems = settings_support_problems(settings, RunTimeSettings)
+        assert any("coarse-grid points" in p for p in problems)
+        settings[section]["interp_frc"] = 0
+        problems = settings_support_problems(settings, RunTimeSettings)
+        assert not any("coarse-grid points" in p for p in problems)
 
     def test_absent_or_malformed_keys_skip(self) -> None:
         check_tile_sizes({"llm": 8}, auto_tiling=False)

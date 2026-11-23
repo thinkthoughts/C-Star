@@ -987,6 +987,60 @@ class TestROMSSimulationInitialization:
             _ = sim.roms_runtime_settings
         assert f"{limit + 1} forcing files" in str(exc.value)
 
+    @mock.patch.object(
+        ROMSSimulation,
+        "_active_cppdefs_for_precheck",
+        return_value={"bulk_frc": True, "marbl": False, "biology_bec2": False},
+    )
+    @mock.patch("cstar.roms.simulation.namelist_schema_for_ref")
+    @mock.patch.object(ROMSSimulation, "_forcing_paths", new_callable=mock.PropertyMock)
+    @mock.patch.object(
+        ROMSInitialConditions, "path_for_roms", new_callable=mock.PropertyMock
+    )
+    @mock.patch.object(ROMSModelGrid, "path_for_roms", new_callable=mock.PropertyMock)
+    def test_roms_runtime_settings_coarse_tile_sizes(
+        self,
+        mock_grid_path,
+        mock_ini_path,
+        mock_forcing_paths,
+        mock_schema_for_ref,
+        mock_cppdefs,
+        stub_romssimulation,
+        stageddatacollection_remote_files,
+    ):
+        """With coarse-grid surface forcing, a tiling whose coarse tiles hold 2
+        points or fewer is refused when the namelist is built (ucla-roms
+        init_coarse stops on it); auto-tiling and model-grid forcing are not.
+        """
+        sim = self._prepare_sim_for_runtime_settings(
+            stub_romssimulation,
+            stageddatacollection_remote_files,
+            mock_grid_path,
+            mock_ini_path,
+            mock_forcing_paths,
+            mock_schema_for_ref,
+        )
+        sim.discretization.n_procs_x, sim.discretization.n_procs_y = 8, 1
+        sim.namelist_overrides = {
+            "param_settings": {"llm": 20, "mmm": 40},
+            "surf_frc_settings": {"interp_bulk_frc": True},
+        }
+        with pytest.raises(ValueError, match="tiling too fine") as exc:
+            _ = sim.roms_runtime_settings
+        assert "param_settings.np_xi=8" in str(exc.value)
+
+        sim.namelist_overrides["surf_frc_settings"]["interp_bulk_frc"] = False
+        assert sim.roms_runtime_settings.param_settings.np_xi == 8
+
+        sim.namelist_overrides["surf_frc_settings"]["interp_bulk_frc"] = True
+        sim.discretization.n_procs_x = 4
+        assert sim.roms_runtime_settings.param_settings.np_xi == 4
+
+        # unknown build (no cppdefs.opt staged): the rule leaves it to ROMS
+        sim.discretization.n_procs_x = 8
+        mock_cppdefs.return_value = {}
+        assert sim.roms_runtime_settings.param_settings.np_xi == 8
+
     @mock.patch("cstar.roms.simulation.namelist_schema_for_ref")
     @mock.patch.object(ROMSSimulation, "_forcing_paths", new_callable=mock.PropertyMock)
     @mock.patch.object(

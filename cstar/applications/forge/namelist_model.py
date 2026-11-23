@@ -91,6 +91,8 @@ from cstar.roms.precheck import (
 from cstar.roms.precheck import (
     check_averages_end_on_marbl_step as _check_averages_end_on_marbl_step,
 )
+from cstar.roms.precheck import COARSE_TILE_MIN_POINTS as _COARSE_TILE_MIN_POINTS
+from cstar.roms.precheck import coarse_tile_width as _coarse_tile_width
 from cstar.roms.precheck import (
     check_marbl_step_ceiling as _check_marbl_step_ceiling,
 )
@@ -465,7 +467,9 @@ def _edge_tile_width(points: int, tiles: int) -> int:
     return points if tiles == 1 else width - (surplus + 1) // 2
 
 
-def check_tile_sizes(param: Mapping[str, Any], *, auto_tiling: bool) -> None:
+def check_tile_sizes(
+    param: Mapping[str, Any], *, auto_tiling: bool, interp_frc: bool = False
+) -> None:
     """Raise ``ValueError`` if ``param.np_xi``/``np_eta`` split ``llm``/``mmm``
     into an edge tile with no grid points (:func:`_edge_tile_width`), naming the
     most tiles that work. Under ``auto_tiling`` ROMS chooses the tiles from the
@@ -473,10 +477,34 @@ def check_tile_sizes(param: Mapping[str, Any], *, auto_tiling: bool) -> None:
 
     Only a tile with no points is refused: that is the case the ucla-roms source
     shows cannot run. A tile narrower than the two-point halo is not.
+
+    With ``interp_frc`` (surface forcing on the coarse grid) a tiling whose
+    coarse-grid tiles hold 2 points or fewer is refused too: ucla-roms'
+    ``init_coarse`` stops on it (Rule L of :mod:`cstar.roms.precheck`).
     """
     if auto_tiling:
         return
     problems = []
+    if interp_frc:
+        for points_key, tiles_key, field in (
+            ("llm", "np_xi", "n_procs_x"),
+            ("mmm", "np_eta", "n_procs_y"),
+        ):
+            try:
+                points, tiles = int(param[points_key]), int(param[tiles_key])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if points < 1 or tiles < 1:
+                continue
+            if (width := _coarse_tile_width(points, tiles)) >= _COARSE_TILE_MIN_POINTS:
+                continue
+            problems.append(
+                f"param.{tiles_key}={tiles} (partitioning.{field}) splits the "
+                f"{points // 2} coarse-grid points of param.{points_key}={points} into "
+                f"tiles of {width}, and ucla-roms stops when coarse-grid surface "
+                f"forcing (interp_frc) meets a coarse tile of "
+                f"{_COARSE_TILE_MIN_POINTS - 1} points or fewer."
+            )
     for axis, points_key, tiles_key, field in (
         ("xi", "llm", "np_xi", "n_procs_x"),
         ("eta", "mmm", "np_eta", "n_procs_y"),
@@ -3484,8 +3512,14 @@ def settings_support_problems(
         problems.append(str(exc))
     try:
         auto_tiling = (settings.get("cppdefs") or {}).get("auto_tiling")
+        interp_frc = any(
+            _flag_requested((settings.get(section) or {}).get("interp_frc"))
+            for section in ("blk_frc", "bgc")
+        )
         check_tile_sizes(
-            settings.get("param") or {}, auto_tiling=_flag_requested(auto_tiling)
+            settings.get("param") or {},
+            auto_tiling=_flag_requested(auto_tiling),
+            interp_frc=interp_frc,
         )
     except ValueError as exc:
         problems.append(str(exc))
