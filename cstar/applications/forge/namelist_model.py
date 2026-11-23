@@ -83,6 +83,7 @@ from cstar.roms.namelist import (
     namelist_schema_for_ref,
     roms_version_from_ref,
 )
+from cstar.roms.precheck import COARSE_TILE_MIN_POINTS as _COARSE_TILE_MIN_POINTS
 from cstar.roms.precheck import NamelistConsistencyError as NamelistConsistencyError
 from cstar.roms.precheck import applies_to as _output_precheck_applies_to
 from cstar.roms.precheck import (
@@ -91,9 +92,6 @@ from cstar.roms.precheck import (
 from cstar.roms.precheck import (
     check_averages_end_on_marbl_step as _check_averages_end_on_marbl_step,
 )
-from cstar.roms.precheck import COARSE_TILE_MIN_POINTS as _COARSE_TILE_MIN_POINTS
-from cstar.roms.precheck import coarse_tile_width as _coarse_tile_width
-from cstar.roms.precheck import narrowest_coarse_tile as _narrowest_coarse_tile
 from cstar.roms.precheck import (
     check_marbl_step_ceiling as _check_marbl_step_ceiling,
 )
@@ -109,6 +107,8 @@ from cstar.roms.precheck import (
 from cstar.roms.precheck import (
     check_restart_period_divisible_by_dt as _check_restart_period_divisible_by_dt,
 )
+from cstar.roms.precheck import coarse_tile_width as _coarse_tile_width
+from cstar.roms.precheck import narrowest_coarse_tile as _narrowest_coarse_tile
 from cstar.roms.precheck import (
     output_period_drift_warnings as _output_period_drift_warnings,
 )

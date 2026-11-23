@@ -48,12 +48,12 @@ from cstar.roms.precheck import (
     averages_end_on_marbl_step_applies_to_schema,
     check_averages_end_on_marbl_step,
     check_coarse_tile_sizes,
-    narrowest_coarse_tile,
     check_file_name_lengths,
     check_forcing_file_count,
     check_output_streams_divide_rst,
     check_restart_period_divisible_by_dt,
     max_forcing_files,
+    narrowest_coarse_tile,
 )
 
 V0_5_0_NAMELIST = Path(__file__).parent / "fixtures" / "example_namelist_v0_5_0.nml"
@@ -1061,7 +1061,8 @@ class TestCoarseTileSizes:
         assert COARSE_TILE_MIN_POINTS == 3
 
     @pytest.mark.parametrize(
-        ("llm", "np_xi"), [(20, 5), (20, 8), (20, 10), (20, 11), (40, 10), (8, 2), (1, 1)]
+        ("llm", "np_xi"),
+        [(20, 5), (20, 8), (20, 10), (20, 11), (40, 10), (8, 2), (1, 1)],
     )
     def test_refused(self, llm, np_xi):
         with pytest.raises(NamelistConsistencyError, match="np_xi") as exc:
@@ -1069,18 +1070,24 @@ class TestCoarseTileSizes:
         assert exc.value.rule == "coarse_tile_sizes"
         assert exc.value.section == "param_settings"
 
-    @pytest.mark.parametrize(("llm", "np_xi"), [(20, 1), (20, 3), (20, 4), (40, 6), (224, 16)])
+    @pytest.mark.parametrize(
+        ("llm", "np_xi"), [(20, 1), (20, 3), (20, 4), (40, 6), (224, 16)]
+    )
     def test_accepted(self, llm, np_xi):
         check_coarse_tile_sizes(_coarse_settings(llm, np_xi), BULK_MARBL)
 
     def test_names_the_largest_tiling_that_works(self):
         # 10 coarse points: 4 tiles give ceil(10/4) = 3, 5 tiles give 2.
-        with pytest.raises(NamelistConsistencyError, match="largest np_xi up to 8 that works is 4"):
+        with pytest.raises(
+            NamelistConsistencyError, match="largest np_xi up to 8 that works is 4"
+        ):
             check_coarse_tile_sizes(_coarse_settings(20, 8), BULK_MARBL)
 
     def test_eta_direction(self):
         with pytest.raises(NamelistConsistencyError, match="np_eta"):
-            check_coarse_tile_sizes(_coarse_settings(40, 1, mmm=20, np_eta=8), BULK_MARBL)
+            check_coarse_tile_sizes(
+                _coarse_settings(40, 1, mmm=20, np_eta=8), BULK_MARBL
+            )
 
     def test_switch_follows_the_compiled_forcing_module(self):
         # A bulk build reads interp_bulk_frc and ignores interp_flux_frc; a flux
@@ -1089,7 +1096,9 @@ class TestCoarseTileSizes:
         check_coarse_tile_sizes(bulk_off_flux_on, BULK_MARBL)
         with pytest.raises(NamelistConsistencyError):
             check_coarse_tile_sizes(bulk_off_flux_on, FLUX_ONLY)
-        check_coarse_tile_sizes(_coarse_settings(20, 8, bulk=True, flux=False), FLUX_ONLY)
+        check_coarse_tile_sizes(
+            _coarse_settings(20, 8, bulk=True, flux=False), FLUX_ONLY
+        )
 
     def test_bgc_switch_needs_a_bgc_build(self):
         bgc_only = _coarse_settings(20, 8, bulk=False, bgc=True)
@@ -1097,7 +1106,9 @@ class TestCoarseTileSizes:
             check_coarse_tile_sizes(bgc_only, BULK_MARBL)
         check_coarse_tile_sizes(bgc_only, {**BULK_MARBL, "marbl": False})
         with pytest.raises(NamelistConsistencyError):
-            check_coarse_tile_sizes(bgc_only, {**BULK_MARBL, "marbl": False, "biology_bec2": True})
+            check_coarse_tile_sizes(
+                bgc_only, {**BULK_MARBL, "marbl": False, "biology_bec2": True}
+            )
 
     def test_skipped_when_the_build_is_unknown(self):
         check_coarse_tile_sizes(_coarse_settings(20, 8), {})
@@ -1109,14 +1120,23 @@ class TestCoarseTileSizes:
         check_coarse_tile_sizes(_coarse_settings(20, 8), BULK_MARBL, auto_tiling=True)
 
     def test_missing_groups_are_skipped(self):
-        check_coarse_tile_sizes({"surf_frc_settings": {"interp_bulk_frc": True}}, BULK_MARBL)
+        check_coarse_tile_sizes(
+            {"surf_frc_settings": {"interp_bulk_frc": True}}, BULK_MARBL
+        )
         check_coarse_tile_sizes({}, BULK_MARBL)
 
     # (llm, np_xi, last tile's coarse points), as the verbatim init_coarse lines of
     # ucla-roms 0.16.0 compute them (RLT-CSTAR-007 harness_coarse.F90 output).
     @pytest.mark.parametrize(
         ("llm", "np_xi", "edge"),
-        [(300, 21, -1), (300, 51, 1), (300, 20, 3), (20, 4, 2), (20, 3, 3), (20, 1, 10)],
+        [
+            (300, 21, -1),
+            (300, 51, 1),
+            (300, 20, 3),
+            (20, 4, 2),
+            (20, 3, 3),
+            (20, 1, 10),
+        ],
     )
     def test_narrowest_coarse_tile_matches_init_coarse(self, llm, np_xi, edge):
         assert narrowest_coarse_tile(llm, np_xi) == edge

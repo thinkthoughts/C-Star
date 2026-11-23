@@ -1241,7 +1241,8 @@ def coarse_tile_width(points: int, tiles: int) -> int:
     """Coarse-grid points per tile that ``init_coarse`` tests against
     :data:`COARSE_TILE_MIN_POINTS`: ``ceil((points // 2) / tiles)`` for a fine grid of
     ``points`` interior points split into ``tiles`` tiles (``gnxc = gnx/2`` and
-    ``nxc = (gnxc + np_xi - 1)/np_xi`` in ``src/roms_read_write.F90``)."""
+    ``nxc = (gnxc + np_xi - 1)/np_xi`` in ``src/roms_read_write.F90``).
+    """
     return (points // 2 + tiles - 1) // tiles
 
 
@@ -1256,7 +1257,8 @@ def narrowest_coarse_tile(points: int, tiles: int) -> int:
     """Coarse-grid points of the last, narrowest tile once ``init_coarse`` has taken
     the surplus ``tiles * ceil - points // 2`` from the first tile (half, rounded
     down) and the last (the rest): ``nxc - (off_xc + 1)/2`` in
-    ``src/roms_read_write.F90``. Zero or less leaves that tile no coarse points."""
+    ``src/roms_read_write.F90``. Zero or less leaves that tile no coarse points.
+    """
     width = coarse_tile_width(points, tiles)
     return width - (tiles * width - points // 2 + 1) // 2
 
@@ -1299,7 +1301,10 @@ def check_coarse_tile_sizes(
     param = _section(settings, "param_settings")
     problems = []
     stops = False  # whether any axis fails init_coarse's own test (ROMS stops)
-    for axis, points_key, tiles_key in (("xi", "llm", "np_xi"), ("eta", "mmm", "np_eta")):
+    for axis, points_key, tiles_key in (
+        ("xi", "llm", "np_xi"),
+        ("eta", "mmm", "np_eta"),
+    ):
         try:
             points = int(_section(param, points_key))
             tiles = int(_section(param, tiles_key))
@@ -1338,8 +1343,8 @@ def check_coarse_tile_sizes(
         )
     if problems:
         lead = (
-            "ROMS stops at the first forcing read with \"tiling too fine for "
-            "coarse-resolution forcing inputs\". "
+            'ROMS stops at the first forcing read with "tiling too fine for '
+            'coarse-resolution forcing inputs". '
             if stops
             else "ROMS would interpolate the forcing onto an edge tile that holds no "
             "coarse-grid points. "
