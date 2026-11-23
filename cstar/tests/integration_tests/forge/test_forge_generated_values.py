@@ -7,6 +7,11 @@ always``, the parent feeds a child whose ``grid_kwargs_child`` gives no ``N`` or
 ``hc`` (a parent written before the resolver required them), and the snapshot holds
 stale values for the coarse-grid flags, the child's coordinates, a tile count and a
 boundary switch.
+
+The parent runs on one tile. ``na-test-8x8`` has 4 coarse-grid points in each
+direction, and ucla-roms' ``init_coarse`` stops when coarse-grid forcing meets a
+coarse tile of 2 points or fewer, so with ``coarse_grid_mode: always`` a single tile
+is the only tiling this grid allows (Rule L).
 """
 
 import shutil
@@ -18,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 import f90nml
 import pytest
 
-from cstar.applications.forge.blueprint import CoarseGridMode
+from cstar.applications.forge.blueprint import CoarseGridMode, Partitioning
 from cstar.applications.forge.engine import (
     known_derived_values,
     process_forge_blueprint,
@@ -62,6 +67,7 @@ class Processed:
 
 
 def _stale_parent(cfg: "ForgeBlueprint") -> None:
+    cfg.domain.partitioning = Partitioning(n_procs_x=1, n_procs_y=1)
     cfg.forcing.surface = [
         item.model_copy(update={"coarse_grid_mode": CoarseGridMode.ALWAYS})
         for item in cfg.forcing.surface
@@ -83,7 +89,7 @@ def _stale_parent(cfg: "ForgeBlueprint") -> None:
     )
     settings["blk_frc"]["interp_frc"] = False
     settings["bgc"]["interp_frc"] = False
-    settings["param"]["np_xi"] = 1
+    settings["param"]["np_xi"] = 2
     settings["cppdefs"]["obc_west"] = False
 
 
@@ -130,7 +136,7 @@ def test_child_coordinates_match_the_child_grid(processed: Processed) -> None:
 def test_partitioning_and_boundaries_come_from_the_domain(
     processed: Processed,
 ) -> None:
-    assert processed.namelist["param_settings"]["np_xi"] == 2
+    assert processed.namelist["param_settings"]["np_xi"] == 1
     assert "#define OBC_WEST" in processed.cppdefs
 
 
