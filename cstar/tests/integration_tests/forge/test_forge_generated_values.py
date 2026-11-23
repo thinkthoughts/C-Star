@@ -11,7 +11,8 @@ boundary switch.
 The parent runs on one tile. ``na-test-8x8`` has 4 coarse-grid points in each
 direction, and ucla-roms' ``init_coarse`` stops when coarse-grid forcing meets a
 coarse tile of 2 points or fewer, so with ``coarse_grid_mode: always`` a single tile
-is the only tiling this grid allows (Rule L).
+is the only tiling this grid allows (Rule L; ``test_forge_coarse_tiling.py`` checks
+that Forge refuses the 2x2 one).
 """
 
 import shutil
