@@ -108,7 +108,11 @@ compiled forcing module has its interpolation switch on: ``interp_bulk_frc`` wit
 ``interp_bgc_frc`` with ``MARBL`` or ``BIOLOGY_BEC2``. Skipped when the build's
 cppdefs are unknown and under auto-tiling, where ROMS chooses the processor grid at
 start-up. Ungated by schema version: releases before 0.6.2 lack the stop and, by
-its source comment, corrupt the interpolated forcing instead.
+its source comment, corrupt the interpolated forcing instead. ``init_coarse`` makes
+that test before it takes the surplus ``np_xi * ceil - points`` from the first tile
+(half, rounded down) and the last (the rest), so it passes tilings whose edge tiles
+are left with no coarse points at all (150 coarse points in 21 tiles: 8 each, edge
+tiles 8 - 9 = -1); Rule L refuses those as well (:func:`narrowest_coarse_tile`).
 
 All are plain functions, not Pydantic ``model_validator``s -- they must not
 run on every model construction (old blueprints/tests would break), and Rules
@@ -1241,6 +1245,22 @@ def coarse_tile_width(points: int, tiles: int) -> int:
     return (points // 2 + tiles - 1) // tiles
 
 
+def _coarse_tiling_runs(points: int, tiles: int) -> bool:
+    return (
+        coarse_tile_width(points, tiles) >= COARSE_TILE_MIN_POINTS
+        and narrowest_coarse_tile(points, tiles) >= 1
+    )
+
+
+def narrowest_coarse_tile(points: int, tiles: int) -> int:
+    """Coarse-grid points of the last, narrowest tile once ``init_coarse`` has taken
+    the surplus ``tiles * ceil - points // 2`` from the first tile (half, rounded
+    down) and the last (the rest): ``nxc - (off_xc + 1)/2`` in
+    ``src/roms_read_write.F90``. Zero or less leaves that tile no coarse points."""
+    width = coarse_tile_width(points, tiles)
+    return width - (tiles * width - points // 2 + 1) // 2
+
+
 def check_coarse_tile_sizes(
     settings: RomsNamelistBase | Mapping[str, Any],
     cppdefs: Mapping[str, bool],
@@ -1287,10 +1307,11 @@ def check_coarse_tile_sizes(
         if points < 1 or tiles < 1:
             continue
         width = coarse_tile_width(points, tiles)
-        if width >= COARSE_TILE_MIN_POINTS:
+        edge = narrowest_coarse_tile(points, tiles)
+        if width >= COARSE_TILE_MIN_POINTS and edge >= 1:
             continue
         best = max(
-            (n for n in range(1, tiles + 1) if coarse_tile_width(points, n) >= COARSE_TILE_MIN_POINTS),
+            (n for n in range(1, tiles + 1) if _coarse_tiling_runs(points, n)),
             default=None,
         )
         hint = (
@@ -1298,11 +1319,20 @@ def check_coarse_tile_sizes(
             if best is not None
             else f"; no {tiles_key} works for {points} points"
         )
+        if width < COARSE_TILE_MIN_POINTS:
+            why = (
+                f"into tiles of {width}, and ucla-roms stops when a coarse tile has "
+                f"{COARSE_TILE_MIN_POINTS - 1} points or fewer"
+            )
+        else:
+            why = (
+                f"into tiles of {width} and takes the surplus from the first and last "
+                f"tile, which leaves an edge tile with {edge} coarse points; ucla-roms' "
+                "own check runs before that step and passes it"
+            )
         problems.append(
             f"param_settings.{tiles_key}={tiles} splits the {points // 2} coarse-grid "
-            f"{axis} points ({points_key}={points} halved) into tiles of {width}, and "
-            f"ucla-roms stops when a coarse tile has {COARSE_TILE_MIN_POINTS - 1} points "
-            f"or fewer{hint}"
+            f"{axis} points ({points_key}={points} halved) {why}{hint}"
         )
     if problems:
         raise NamelistConsistencyError(

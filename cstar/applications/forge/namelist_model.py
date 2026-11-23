@@ -93,6 +93,7 @@ from cstar.roms.precheck import (
 )
 from cstar.roms.precheck import COARSE_TILE_MIN_POINTS as _COARSE_TILE_MIN_POINTS
 from cstar.roms.precheck import coarse_tile_width as _coarse_tile_width
+from cstar.roms.precheck import narrowest_coarse_tile as _narrowest_coarse_tile
 from cstar.roms.precheck import (
     check_marbl_step_ceiling as _check_marbl_step_ceiling,
 )
@@ -480,7 +481,8 @@ def check_tile_sizes(
 
     With ``interp_frc`` (surface forcing on the coarse grid) a tiling whose
     coarse-grid tiles hold 2 points or fewer is refused too: ucla-roms'
-    ``init_coarse`` stops on it (Rule L of :mod:`cstar.roms.precheck`).
+    ``init_coarse`` stops on it (Rule L of :mod:`cstar.roms.precheck`). So is one
+    whose edge coarse tile is left with no points once the surplus is taken.
     """
     if auto_tiling:
         return
@@ -496,15 +498,26 @@ def check_tile_sizes(
                 continue
             if points < 1 or tiles < 1:
                 continue
-            if (width := _coarse_tile_width(points, tiles)) >= _COARSE_TILE_MIN_POINTS:
+            width = _coarse_tile_width(points, tiles)
+            edge = _narrowest_coarse_tile(points, tiles)
+            if width >= _COARSE_TILE_MIN_POINTS and edge >= 1:
                 continue
-            problems.append(
-                f"param.{tiles_key}={tiles} (partitioning.{field}) splits the "
-                f"{points // 2} coarse-grid points of param.{points_key}={points} into "
-                f"tiles of {width}, and ucla-roms stops when coarse-grid surface "
-                f"forcing (interp_frc) meets a coarse tile of "
-                f"{_COARSE_TILE_MIN_POINTS - 1} points or fewer."
-            )
+            if width < _COARSE_TILE_MIN_POINTS:
+                problems.append(
+                    f"param.{tiles_key}={tiles} (partitioning.{field}) splits the "
+                    f"{points // 2} coarse-grid points of param.{points_key}={points} "
+                    f"into tiles of {width}, and ucla-roms stops when coarse-grid "
+                    f"surface forcing (interp_frc) meets a coarse tile of "
+                    f"{_COARSE_TILE_MIN_POINTS - 1} points or fewer."
+                )
+            else:
+                problems.append(
+                    f"param.{tiles_key}={tiles} (partitioning.{field}) splits the "
+                    f"{points // 2} coarse-grid points of param.{points_key}={points} "
+                    f"into tiles of {width} and takes the surplus from the first and "
+                    f"last tile, which leaves an edge tile with {edge} coarse-grid "
+                    "points for coarse-grid surface forcing (interp_frc)."
+                )
     for axis, points_key, tiles_key, field in (
         ("xi", "llm", "np_xi", "n_procs_x"),
         ("eta", "mmm", "np_eta", "n_procs_y"),

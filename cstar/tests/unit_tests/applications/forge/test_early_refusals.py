@@ -301,6 +301,15 @@ class TestTileSizes:
                 self._param(llm, np_xi, mmm=40), auto_tiling=False, interp_frc=True
             )
 
+    def test_coarse_forcing_refuses_an_empty_edge_coarse_tile(self) -> None:
+        """150 coarse points in 21 tiles of 8: ucla-roms' own test passes, and the
+        surplus of 18 leaves the first and last tile with -1 coarse points."""
+        check_tile_sizes(self._param(300, 21, mmm=40), auto_tiling=False)
+        with pytest.raises(ValueError, match="edge tile with -1 coarse-grid points"):
+            check_tile_sizes(
+                self._param(300, 21, mmm=40), auto_tiling=False, interp_frc=True
+            )
+
     def test_coarse_forcing_accepts_three_point_coarse_tiles(self) -> None:
         check_tile_sizes(self._param(20, 4, mmm=40), auto_tiling=False, interp_frc=True)
 

@@ -48,6 +48,7 @@ from cstar.roms.precheck import (
     averages_end_on_marbl_step_applies_to_schema,
     check_averages_end_on_marbl_step,
     check_coarse_tile_sizes,
+    narrowest_coarse_tile,
     check_file_name_lengths,
     check_forcing_file_count,
     check_output_streams_divide_rst,
@@ -1110,6 +1111,29 @@ class TestCoarseTileSizes:
     def test_missing_groups_are_skipped(self):
         check_coarse_tile_sizes({"surf_frc_settings": {"interp_bulk_frc": True}}, BULK_MARBL)
         check_coarse_tile_sizes({}, BULK_MARBL)
+
+    # (llm, np_xi, last tile's coarse points), as the verbatim init_coarse lines of
+    # ucla-roms 0.16.0 compute them (RLT-CSTAR-007 harness_coarse.F90 output).
+    @pytest.mark.parametrize(
+        ("llm", "np_xi", "edge"),
+        [(300, 21, -1), (300, 51, 1), (300, 20, 3), (20, 4, 2), (20, 3, 3), (20, 1, 10)],
+    )
+    def test_narrowest_coarse_tile_matches_init_coarse(self, llm, np_xi, edge):
+        assert narrowest_coarse_tile(llm, np_xi) == edge
+
+    def test_refuses_an_edge_tile_left_with_no_coarse_points(self):
+        # 150 coarse points in 21 tiles: init_coarse's own test sees ceil = 8 and
+        # passes, then takes the surplus of 18 from the first and last tile.
+        with pytest.raises(NamelistConsistencyError, match="edge tile with -1") as exc:
+            check_coarse_tile_sizes(_coarse_settings(300, 21), BULK_MARBL)
+        assert exc.value.rule == "coarse_tile_sizes"
+        assert "largest np_xi up to 21 that works is 20" in str(exc.value)
+
+    def test_edge_tiles_of_one_or_two_coarse_points_are_left_to_ucla_roms(self):
+        # init_coarse runs these; whether their halo is filled correctly is an open
+        # question (RLT-CSTAR-007 findings), so Rule L does not refuse them.
+        check_coarse_tile_sizes(_coarse_settings(300, 51), BULK_MARBL)
+        check_coarse_tile_sizes(_coarse_settings(20, 4), BULK_MARBL)
 
     def test_live_namelist(self):
         nml = RomsNamelistV0_16_0.read(V0_16_0_NAMELIST)
