@@ -1129,6 +1129,17 @@ class TestCoarseTileSizes:
         assert exc.value.rule == "coarse_tile_sizes"
         assert "largest np_xi up to 21 that works is 20" in str(exc.value)
 
+    def test_message_says_whether_ucla_roms_stops(self):
+        # ceil <= 2: init_coarse stops; empty edge tile: it runs, so the message must
+        # not claim it stops.
+        with pytest.raises(NamelistConsistencyError) as stops:
+            check_coarse_tile_sizes(_coarse_settings(20, 8), BULK_MARBL)
+        assert "ROMS stops at the first forcing read" in str(stops.value)
+        with pytest.raises(NamelistConsistencyError) as runs:
+            check_coarse_tile_sizes(_coarse_settings(300, 21), BULK_MARBL)
+        assert "ROMS stops" not in str(runs.value)
+        assert "edge tile that holds no coarse-grid points" in str(runs.value)
+
     def test_edge_tiles_of_one_or_two_coarse_points_are_left_to_ucla_roms(self):
         # init_coarse runs these; whether their halo is filled correctly is an open
         # question (RLT-CSTAR-007 findings), so Rule L does not refuse them.

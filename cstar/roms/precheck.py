@@ -1298,6 +1298,7 @@ def check_coarse_tile_sizes(
         return
     param = _section(settings, "param_settings")
     problems = []
+    stops = False  # whether any axis fails init_coarse's own test (ROMS stops)
     for axis, points_key, tiles_key in (("xi", "llm", "np_xi"), ("eta", "mmm", "np_eta")):
         try:
             points = int(_section(param, points_key))
@@ -1320,6 +1321,7 @@ def check_coarse_tile_sizes(
             else f"; no {tiles_key} works for {points} points"
         )
         if width < COARSE_TILE_MIN_POINTS:
+            stops = True
             why = (
                 f"into tiles of {width}, and ucla-roms stops when a coarse tile has "
                 f"{COARSE_TILE_MIN_POINTS - 1} points or fewer"
@@ -1335,11 +1337,17 @@ def check_coarse_tile_sizes(
             f"{axis} points ({points_key}={points} halved) {why}{hint}"
         )
     if problems:
+        lead = (
+            "ROMS stops at the first forcing read with \"tiling too fine for "
+            "coarse-resolution forcing inputs\". "
+            if stops
+            else "ROMS would interpolate the forcing onto an edge tile that holds no "
+            "coarse-grid points. "
+        )
         raise NamelistConsistencyError(
             "Coarse-grid surface forcing (interp_bulk_frc, interp_flux_frc or "
-            "interp_bgc_frc) cannot run "
-            "on this tiling: ROMS stops at the first forcing read with \"tiling too "
-            "fine for coarse-resolution forcing inputs\". "
+            "interp_bgc_frc) cannot run on this tiling: "
+            + lead
             + "; ".join(problems)
             + ". Use fewer tiles, or surface forcing on the model grid.",
             rule="coarse_tile_sizes",
