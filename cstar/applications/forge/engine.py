@@ -48,6 +48,7 @@ from cstar.applications.forge.blueprint import (
 )
 from cstar.applications.forge.host import HostPaths
 from cstar.applications.forge.namelist_model import (
+    TILE_SIZE_SECTIONS,
     check_cdr_releases,
     check_forcing_coverage,
     check_marbl_bgc_inputs,
@@ -259,6 +260,26 @@ def known_derived_values(cfg: ForgeBlueprint) -> dict[str, dict[str, Any]]:
             section = "bgc" if item.type == SurfaceType.BGC else "blk_frc"
             known.setdefault(section, {})["interp_frc"] = coarse
     return known
+
+
+def generated_tile_settings(cfg: ForgeBlueprint) -> dict[str, dict[str, Any]]:
+    """The :data:`~cstar.applications.forge.namelist_model.TILE_SIZE_SECTIONS` of
+    ``cfg.model_settings`` overlaid with :func:`known_derived_values`.
+
+    Generation writes the tiles from ``domain.partitioning`` and ``interp_frc`` from
+    an explicit ``coarse_grid_mode``, whatever the stored snapshot says, and
+    ``configure_build`` checks the tiles again on what it wrote. A leaf the blueprint
+    does not fix keeps its stored value, as in ``configure_build``: the tiles under
+    ``partitioning.auto_tiling``, ``cppdefs.auto_tiling`` itself, the grid sizes when
+    a grid file supplies the grid, and ``interp_frc`` when every surface item says
+    ``auto`` (roms-tools chooses then, or reads it off a reused surface file).
+    """
+    derived = known_derived_values(cfg)
+    settings = cfg.model_settings
+    return {
+        section: {**(settings.get(section) or {}), **derived.get(section, {})}
+        for section in TILE_SIZE_SECTIONS
+    }
 
 
 def check_derived_overrides(overrides: dict[str, Any], derived: dict[str, Any]) -> None:
@@ -502,7 +523,9 @@ def blueprint_problems(cfg: ForgeBlueprint) -> list[str]:
 
     Validates ``model_settings`` against the run-time schema of the pinned ucla-roms
     release, then runs :func:`check_forcing_coverage`, :func:`check_marbl_bgc_inputs`,
-    :func:`check_cdr_releases` and :func:`check_derived_overrides`. Each reads only
+    :func:`check_cdr_releases` and :func:`check_derived_overrides`. The tile check
+    reads :func:`generated_tile_settings`, the values generation will write, rather
+    than the stored snapshot. Each reads only
     the blueprint; the checks that need source data or the grid run later, during
     generation. A commit-hash ``code.roms`` pin is first resolved to its release tag
     (:func:`~cstar.roms.namelist.release_ref_for_remote`, a treeless clone of
@@ -519,7 +542,11 @@ def blueprint_problems(cfg: ForgeBlueprint) -> list[str]:
     roms_ref = cfg.code.roms.commit or cfg.code.roms.branch
     if roms_ref:
         roms_ref = release_ref_for_remote(cfg.code.roms.location, roms_ref)
-    problems = validate_run_time_sections(cfg.model_settings, roms_ref=roms_ref)
+    problems = validate_run_time_sections(
+        cfg.model_settings,
+        roms_ref=roms_ref,
+        tile_settings=generated_tile_settings(cfg),
+    )
     try:
         check_forcing_coverage(
             cfg.forcing,

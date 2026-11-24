@@ -139,7 +139,7 @@ def test_process_forge_blueprint_validates_against_the_resolved_release(
     cfg = _pinned_blueprint(info["repo"], info["hash_0_4_2"])
     seen = {}
 
-    def fake_validate(model_settings, *, roms_ref):
+    def fake_validate(model_settings, *, roms_ref, tile_settings=None):
         seen["roms_ref"] = roms_ref
         return []
 

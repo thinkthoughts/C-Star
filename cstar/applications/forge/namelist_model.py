@@ -3506,13 +3506,26 @@ def build_namelist(rt: _RunTimeSettingsCommon, n_tracers: int) -> RomsNamelistBa
     return namelist_cls(**kwargs)
 
 
+TILE_SIZE_SECTIONS: tuple[str, ...] = ("param", "cppdefs", "blk_frc", "bgc")
+"""The settings sections :func:`tile_size_problems` reads, in this order: the tiles
+and grid sizes (``param``), ``cppdefs.auto_tiling``, then the sections whose
+``interp_frc`` puts surface forcing on the coarse grid."""
+
+
 def settings_support_problems(
-    settings: Mapping[str, Any], settings_cls: type[_RunTimeSettingsCommon]
+    settings: Mapping[str, Any],
+    settings_cls: type[_RunTimeSettingsCommon],
+    *,
+    tile_settings: Mapping[str, Any] | None = None,
 ) -> list[str]:
     """Settings a Forge build cannot honor, found before any input is generated:
     unknown keys (:func:`check_settings_keys`), pipe forcing
-    (:func:`check_pipe_forcing`) and tiles with no grid points
-    (:func:`check_tile_sizes`). Each message is one list entry.
+    (:func:`check_pipe_forcing`) and tiles ucla-roms cannot run
+    (:func:`tile_size_problems`). Each message is one list entry.
+
+    ``tile_settings``, when given, replaces ``settings`` for the tile check only:
+    :func:`~cstar.applications.forge.engine.blueprint_problems` passes the values
+    generation will write, so the tiles are checked once, on those values.
     """
     problems = []
     try:
@@ -3523,20 +3536,29 @@ def settings_support_problems(
         check_pipe_forcing(settings.get("pipe_frc") or {})
     except ValueError as exc:
         problems.append(str(exc))
+    problems += tile_size_problems(settings if tile_settings is None else tile_settings)
+    return problems
+
+
+def tile_size_problems(settings: Mapping[str, Any]) -> list[str]:
+    """:func:`check_tile_sizes` on the :data:`TILE_SIZE_SECTIONS` of ``settings``,
+    as a list of at most one message.
+    """
+    param_section, cppdefs_section, *flag_sections = TILE_SIZE_SECTIONS
+    auto_tiling = (settings.get(cppdefs_section) or {}).get("auto_tiling")
+    interp_frc = any(
+        _flag_requested((settings.get(section) or {}).get("interp_frc"))
+        for section in flag_sections
+    )
     try:
-        auto_tiling = (settings.get("cppdefs") or {}).get("auto_tiling")
-        interp_frc = any(
-            _flag_requested((settings.get(section) or {}).get("interp_frc"))
-            for section in ("blk_frc", "bgc")
-        )
         check_tile_sizes(
-            settings.get("param") or {},
+            settings.get(param_section) or {},
             auto_tiling=_flag_requested(auto_tiling),
             interp_frc=interp_frc,
         )
     except ValueError as exc:
-        problems.append(str(exc))
-    return problems
+        return [str(exc)]
+    return []
 
 
 def check_settings_supported(
@@ -3548,7 +3570,10 @@ def check_settings_supported(
 
 
 def validate_run_time_sections(
-    settings: dict, roms_ref: str | None = None
+    settings: dict,
+    roms_ref: str | None = None,
+    *,
+    tile_settings: Mapping[str, Any] | None = None,
 ) -> list[str]:
     """Validate the *present* run-time sections of a (possibly partial) settings dict
     against the run-time settings schema, returning a list of human-readable errors
@@ -3572,6 +3597,9 @@ def validate_run_time_sections(
         The ucla-roms ref the blueprint's code is pinned to, forwarded to
         :func:`run_time_settings_for_ref` to select the schema variant.
         ``None`` (default) preserves the legacy schema.
+    tile_settings : mapping or None
+        Forwarded to :func:`settings_support_problems`: the settings the tile check
+        reads instead of ``settings``.
     """
     errors: list[str] = []
     settings_cls = run_time_settings_for_ref(roms_ref)
@@ -3689,7 +3717,9 @@ def validate_run_time_sections(
         errors.append(str(exc))
     except ValidationError:
         pass  # a malformed section is already reported by the loop above
-    errors += settings_support_problems(settings, settings_cls)
+    errors += settings_support_problems(
+        settings, settings_cls, tile_settings=tile_settings
+    )
     return errors
 
 

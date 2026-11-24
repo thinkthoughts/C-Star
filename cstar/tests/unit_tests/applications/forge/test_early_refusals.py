@@ -19,13 +19,21 @@ import pytest
 from pydantic import ValidationError
 
 import cstar.catalog
-from cstar.applications.forge.blueprint import ForgeBlueprint, RunWindow
+from cstar.applications.forge.blueprint import (
+    CoarseGridMode,
+    ForgeBlueprint,
+    Partitioning,
+    RunWindow,
+    SurfaceType,
+)
+from cstar.applications.forge.engine import blueprint_problems, generated_tile_settings
 from cstar.applications.forge.namelist_model import (
     CPPDEFS_KEYS,
     RunTimeSettings,
     check_tile_sizes,
     run_time_settings_for_ref,
     settings_support_problems,
+    tile_size_problems,
     unknown_settings_keys,
     validate_run_time_sections,
 )
@@ -379,3 +387,129 @@ class TestShippedFiles:
         """Every ``cppdefs.<key>`` the bundled template reads is a known key."""
         read = set(re.findall(r"cppdefs\.(\w+)", _TEMPLATE.read_text())) - {"opt"}
         assert read <= CPPDEFS_KEYS, sorted(read - CPPDEFS_KEYS)
+
+
+class TestGeneratedTileSettings:
+    """Before generation, the tiles are checked once, on the values generation will
+    write (``generated_tile_settings``): the tiles of ``domain.partitioning`` and the
+    ``interp_frc`` an explicit ``coarse_grid_mode`` fixes, whatever the stored
+    snapshot says. The test grid is 8x8: 4 coarse-grid points each way, so coarse
+    forcing runs on one tile and stops on two (``init_coarse``).
+    """
+
+    _TILES = re.compile(r"param\.np_(xi|eta)=")
+
+    @staticmethod
+    def _coarse(
+        mode: CoarseGridMode,
+        *,
+        stored_interp: bool,
+        keep: set[SurfaceType] | None = None,
+    ) -> ForgeBlueprint:
+        bp = _resolve()
+        bp.forcing.surface = [
+            item.model_copy(update={"coarse_grid_mode": mode})
+            for item in bp.forcing.surface
+            if keep is None or item.type in keep
+        ]
+        for section in ("blk_frc", "bgc"):
+            bp.model_settings[section]["interp_frc"] = stored_interp
+        return bp
+
+    def _tile_problems(self, bp: ForgeBlueprint) -> list[str]:
+        return [p for p in blueprint_problems(bp) if self._TILES.search(p)]
+
+    def test_coarse_forcing_on_two_by_two_is_one_message(self) -> None:
+        problems = self._tile_problems(
+            self._coarse(CoarseGridMode.ALWAYS, stored_interp=True)
+        )
+        assert len(problems) == 1
+        assert "param.np_xi=2 (partitioning.n_procs_x)" in problems[0]
+        assert "param.np_eta=2 (partitioning.n_procs_y)" in problems[0]
+
+    def test_stale_interp_frc_is_refused(self) -> None:
+        """``always`` with a snapshot still saying ``interp_frc = .false.``."""
+        bp = self._coarse(CoarseGridMode.ALWAYS, stored_interp=False)
+        assert len(self._tile_problems(bp)) == 1
+
+    def test_stale_tiles_with_a_runnable_partitioning_pass(self) -> None:
+        """Generation writes 1x1 from ``domain.partitioning``; the stored 2x2 is
+        never written, so it is not refused.
+        """
+        bp = self._coarse(CoarseGridMode.ALWAYS, stored_interp=True)
+        bp.domain.partitioning = Partitioning(n_procs_x=1, n_procs_y=1)
+        assert bp.model_settings["param"]["np_xi"] == 2
+        assert self._tile_problems(bp) == []
+
+    def test_stale_tiles_with_a_bad_partitioning_cite_the_written_tiles(self) -> None:
+        bp = self._coarse(CoarseGridMode.ALWAYS, stored_interp=True)
+        bp.model_settings["param"]["np_xi"] = 4
+        (problem,) = self._tile_problems(bp)
+        assert "param.np_xi=2" in problem
+        assert "np_xi=4" not in problem
+
+    def test_never_with_stale_interp_frc_passes(self) -> None:
+        bp = self._coarse(CoarseGridMode.NEVER, stored_interp=True)
+        assert self._tile_problems(bp) == []
+
+    @pytest.mark.parametrize("stored", [True, False])
+    def test_auto_keeps_the_stored_flags(self, stored: bool) -> None:
+        """Under ``auto`` roms-tools chooses the grid during generation, so the
+        stored flags are the best available; ``configure_build`` checks again.
+        """
+        bp = self._coarse(CoarseGridMode.AUTO, stored_interp=stored)
+        tiles = generated_tile_settings(bp)
+        assert tiles["blk_frc"]["interp_frc"] is stored
+        assert tiles["bgc"]["interp_frc"] is stored
+        assert bool(self._tile_problems(bp)) is stored
+
+    def test_bgc_only_sets_the_bgc_flag(self) -> None:
+        bp = self._coarse(
+            CoarseGridMode.ALWAYS, stored_interp=False, keep={SurfaceType.BGC}
+        )
+        tiles = generated_tile_settings(bp)
+        assert tiles["bgc"]["interp_frc"] is True
+        assert tiles["blk_frc"]["interp_frc"] is False
+        assert len(tile_size_problems(tiles)) == 1
+
+    def test_physics_only_sets_the_bulk_flag(self) -> None:
+        bp = self._coarse(
+            CoarseGridMode.ALWAYS, stored_interp=False, keep={SurfaceType.PHYSICS}
+        )
+        tiles = generated_tile_settings(bp)
+        assert tiles["blk_frc"]["interp_frc"] is True
+        assert tiles["bgc"]["interp_frc"] is False
+        assert len(tile_size_problems(tiles)) == 1
+
+    def test_auto_tiling_keeps_the_stored_tiles_and_cppdef(self) -> None:
+        """``partitioning.auto_tiling`` fixes no tile count, and generation leaves
+        ``cppdefs.auto_tiling`` as stored, so both are checked as stored, as
+        ``configure_build`` checks them.
+        """
+        bp = self._coarse(CoarseGridMode.ALWAYS, stored_interp=True)
+        bp.domain.partitioning = Partitioning(auto_tiling=True, n_cores=4)
+        tiles = generated_tile_settings(bp)
+        assert tiles["param"]["np_xi"] == bp.model_settings["param"]["np_xi"]
+        assert tiles["cppdefs"]["auto_tiling"] is False
+        assert len(tile_size_problems(tiles)) == 1
+        bp.model_settings["cppdefs"]["auto_tiling"] = True
+        assert tile_size_problems(generated_tile_settings(bp)) == []
+
+    def test_tile_settings_replace_the_snapshot_for_the_tile_check_only(
+        self,
+    ) -> None:
+        coarse = {"interp_frc": True}
+        bad = {
+            "param": {"llm": 8, "mmm": 8, "np_xi": 2, "np_eta": 2},
+            "blk_frc": coarse,
+        }
+        good = {
+            "param": {"llm": 8, "mmm": 8, "np_xi": 1, "np_eta": 1},
+            "blk_frc": coarse,
+        }
+        assert len(settings_support_problems(bad, RunTimeSettings)) == 1
+        assert settings_support_problems(bad, RunTimeSettings, tile_settings=good) == []
+        assert (
+            len(settings_support_problems(good, RunTimeSettings, tile_settings=bad))
+            == 1
+        )

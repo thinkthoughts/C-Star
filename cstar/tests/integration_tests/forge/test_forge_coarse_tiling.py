@@ -84,3 +84,27 @@ def test_coarse_forcing_on_one_tile_has_no_tiling_problem(
     cfg.model_settings["param"].update(np_xi=1, np_eta=1)
 
     assert blueprint_problems(cfg) == []
+
+
+def test_stale_snapshot_is_refused_before_generation(
+    tmp_path: Path,
+    forge_blueprint_factory: Callable[..., tuple["ForgeBlueprint", Path]],
+) -> None:
+    """A saved blueprint edited to ``coarse_grid_mode: always`` whose snapshot still
+    says ``interp_frc = .false.``: generation would write the coarse-grid flags from
+    the mode, so the refusal comes before any input is generated.
+    """
+    cfg = _coarse_parent(forge_blueprint_factory, tmp_path)
+    cfg.model_settings["blk_frc"]["interp_frc"] = False
+    cfg.model_settings["bgc"]["interp_frc"] = False
+    host = HostPaths(
+        working_dir=tmp_path,
+        source_data_cache=tmp_path / "source_cache",
+        system="test",
+    )
+
+    with pytest.raises(InvalidForgeBlueprintError) as excinfo:
+        process_forge_blueprint(cfg, host=host, use_dask=False)
+
+    assert "splits the 4 coarse-grid points of param.llm=8" in str(excinfo.value)
+    assert not list(tmp_path.rglob("*.nc")), "inputs were generated before refusal"

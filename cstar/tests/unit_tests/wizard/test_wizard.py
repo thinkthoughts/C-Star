@@ -38,6 +38,7 @@ from cstar.applications.forge.namelist_model import (
     RunTimeSettingsV0_14_0,
     RunTimeSettingsV0_15_0,
     RunTimeSettingsV0_16_0,
+    validate_run_time_sections,
 )
 from cstar.applications.forge.resolve import build_forge_blueprint, cfl_dt
 from cstar.catalog.spec_schema import known_spec_keys
@@ -2352,6 +2353,27 @@ class TestBgcModeSettings:
             "cppdefs": {"sponge_tune": True},
             **_INTERP_HOLD,
         }
+
+    def test_loaded_stale_tiles_are_checked_on_the_partitioning(self):
+        """A loaded blueprint's tiles are checked on what generation writes
+        (``domain.partitioning``), as ``cstar blueprint check`` checks them, not on
+        a stale stored ``param.np_xi``.
+        """
+        wiz = self._wizard()
+        assert wiz.config is not None, wiz.derived.value
+        settings = copy.deepcopy(wiz.config.model_settings)
+        settings["param"]["np_xi"] = 4 * int(settings["param"]["llm"])
+        edited = wiz.config.model_copy(update={"model_settings": settings})
+        assert any(
+            "param.np_xi=" in p
+            for p in validate_run_time_sections(
+                settings, roms_ref=edited.code.roms.commit or edited.code.roms.branch
+            )
+        )
+
+        problems = ForgeBlueprintWizard()._populate_from(edited)
+
+        assert not any("param.np_xi=" in p for p in problems), problems
 
     def test_cdr_lite_stream_is_shown_on_without_recording_an_override(self):
         wiz = self._wizard()

@@ -77,6 +77,7 @@ from cstar.applications.forge.blueprint import (
     TidalForcingItem,
     TidalSource,
 )
+from cstar.applications.forge.engine import generated_tile_settings
 from cstar.applications.forge.namelist_model import (
     CDR_OUTPUT_SECTIONS,
     FS_MODE_SPLIT,
@@ -8523,8 +8524,12 @@ class ForgeBlueprintWizard:
         # model's default. Computed once here and reused below when seeding
         # self.roms_ref, so the two never drift apart.
         stored_ref = cfg.code.roms.commit or cfg.code.roms.branch or ""
+        # Tiles are checked on the values generation will write, as
+        # `cstar blueprint check` checks them (blueprint_problems).
         loaded_problems = validate_run_time_sections(
-            cfg.model_settings, roms_ref=stored_ref or None
+            cfg.model_settings,
+            roms_ref=stored_ref or None,
+            tile_settings=generated_tile_settings(cfg),
         )
         with self._suspend():
             # domain dropdown -> custom (the file, not a catalog entry, is authoritative)
